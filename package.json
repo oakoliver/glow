@@ -1,0 +1,67 @@
+{
+  "name": "@oakoliver/glow",
+  "version": "1.0.0",
+  "description": "Terminal markdown reader — zero-dependency TypeScript port of Charmbracelet's Glow",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "glow": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build:esm": "esbuild src/cli.ts --bundle --format=esm --platform=node --outfile=dist/cli.js --target=esnext --banner:js='#!/usr/bin/env node' --external:@oakoliver/lipgloss --external:@oakoliver/glamour --external:@oakoliver/bubbletea --external:@oakoliver/bubbles",
+    "build:lib": "esbuild src/index.ts --bundle --format=esm --platform=node --outfile=dist/index.js --target=esnext --external:@oakoliver/lipgloss --external:@oakoliver/glamour --external:@oakoliver/bubbletea --external:@oakoliver/bubbles",
+    "build:cjs": "esbuild src/index.ts --bundle --format=cjs --platform=node --outfile=dist/index.cjs --target=esnext --external:@oakoliver/lipgloss --external:@oakoliver/glamour --external:@oakoliver/bubbletea --external:@oakoliver/bubbles",
+    "build:types": "tsc --emitDeclarationOnly",
+    "build": "npm run build:esm && npm run build:lib && npm run build:cjs && npm run build:types",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "markdown",
+    "terminal",
+    "reader",
+    "glow",
+    "charmbracelet",
+    "tui",
+    "cli",
+    "glamour",
+    "bubbletea",
+    "typescript"
+  ],
+  "author": "Antonio Oliveira <antonio@oakoliver.com> (https://oakoliver.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oakoliver/glow"
+  },
+  "homepage": "https://github.com/oakoliver/glow#readme",
+  "bugs": {
+    "url": "https://github.com/oakoliver/glow/issues"
+  },
+  "dependencies": {
+    "@oakoliver/lipgloss": "^1.0.0",
+    "@oakoliver/glamour": "^1.0.0",
+    "@oakoliver/bubbletea": "^1.0.0",
+    "@oakoliver/bubbles": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "esbuild": "^0.27.4",
+    "typescript": "^5"
+  }
+}
