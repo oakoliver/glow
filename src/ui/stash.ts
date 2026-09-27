@@ -189,7 +189,13 @@ export function filterMarkdowns(m: StashModel): Cmd {
 
 /** Cmd that searches the working directory for markdown files. */
 export function findLocalFiles(common: CommonModel): Cmd {
-  return () => new FoundMarkdownsMsg(findMarkdowns(common.cwd, common.cfg));
+  return () => {
+    try {
+      return new FoundMarkdownsMsg(findMarkdowns(common.cwd, common.cfg));
+    } catch (err) {
+      return new ErrMsg(err instanceof Error ? err : new Error(String(err)));
+    }
+  };
 }
 
 /** Simple fuzzy match: all needle chars must appear in order in haystack. */

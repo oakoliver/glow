@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.0.1
+
+### Fixed
+
+- The file listing only shows markdown files. It is now a 1:1 port of
+  upstream's finder (glow v3.0.0 `findLocalFiles` on
+  [muesli/gitcha](https://github.com/muesli/gitcha) v0.3.0 and
+  sabhiram/go-gitignore): files match the glob patterns `*.md`, `*.mdown`,
+  `*.mkdn`, `*.mkd` and `*.markdown` (case-insensitive), so extensionless
+  files such as `.DS_Store`, `README` or `Dockerfile` are no longer listed.
+  Without `--all`, dotfiles and dot-directories, `node_modules`, `$GOPATH`,
+  `~/Library` (macOS) and paths excluded by the enclosing git repository's
+  root `.gitignore` are skipped (nested `.gitignore` files are not read, as
+  upstream); with `--all`, nothing is skipped. Entries are listed in the same
+  order as upstream, with symlinks resolved as upstream does.
+- `isMarkdownFile` uses Go's `filepath.Ext` semantics: a leading dot counts as
+  an extension, so `.DS_Store` is treated as source code, not markdown.
+- An unreadable or missing directory reports an error instead of an empty list.
+- The type build (`build:types` / `tsc --noEmit`) works against the current
+  sibling ports: `NewView`, `BackgroundColorMsg`, `RequestBackgroundColor`
+  (`@oakoliver/bubbletea` 1.2.0) and `withStylesFromJSONFile`
+  (`@oakoliver/glamour` 1.1.0) are exported by those versions; the failures came
+  from stale 1.0.0 copies installed from npm.
+
+### Added
+
+- `markdownExtensions` and `localFileToMarkdown` are exported.
+
 ## 2.0.0
 
 Parity with [charmbracelet/glow v3.0.0](https://github.com/charmbracelet/glow/releases/tag/v3.0.0)

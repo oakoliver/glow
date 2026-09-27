@@ -98,9 +98,21 @@ export function wrapCodeBlock(s: string, language: string): string {
 
 const markdownExtensions = ['.md', '.mdown', '.mkdn', '.mkd', '.markdown'];
 
+/**
+ * Go's filepath.Ext: the suffix beginning at the final dot in the final
+ * element of the path. Unlike Node's path.extname, a leading dot counts, so
+ * ".DS_Store" has the extension ".DS_Store" rather than none.
+ */
+export function goExt(p: string): string {
+  for (let i = p.length - 1; i >= 0 && p[i] !== '/' && p[i] !== path.sep; i--) {
+    if (p[i] === '.') return p.slice(i);
+  }
+  return '';
+}
+
 /** Returns whether the filename has a markdown extension. */
 export function isMarkdownFile(filename: string): boolean {
-  const ext = path.extname(filename);
+  const ext = goExt(filename);
   if (ext === '') {
     // By default, assume it's a markdown file.
     return true;

@@ -1,9 +1,9 @@
-// filewalk.ts — .gitignore-aware file walking for Glow TUI
-// Replaces Go's muesli/gitcha dependency with zero-dep implementation
+// filewalk.ts — local markdown file discovery for the Glow TUI
+// Port of findLocalFiles / localFileToMarkdown in charmbracelet/glow/ui/ui.go
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { isMarkdownFile } from '../utils.js';
+import { findAllFilesExcept, findFilesExcept, type SearchResult } from './gitcha.js';
 import { ignorePatterns } from './ignore.js';
 import type { Config } from '../config.js';
 import { type Markdown, newMarkdown, buildFilterValue } from './markdown.js';
@@ -19,245 +19,54 @@ export class FoundMarkdownsMsg {
 }
 
 // --------------------------------------------------------------------------
-// .gitignore parsing
-// --------------------------------------------------------------------------
-
-interface IgnoreRule {
-  /** Pattern to match against (relative path components). */
-  pattern: string;
-  /** Whether the rule is negated (prefixed with !). */
-  negated: boolean;
-  /** Whether the pattern ends with / (directory-only). */
-  directoryOnly: boolean;
-  /** The regex compiled from the glob pattern. */
-  regex: RegExp;
-}
-
-/** Parse a .gitignore file into a list of rules. */
-function parseGitignore(content: string): IgnoreRule[] {
-  const rules: IgnoreRule[] = [];
-  const lines = content.split('\n');
-
-  for (let line of lines) {
-    line = line.trim();
-    // Skip empty lines and comments
-    if (line === '' || line.startsWith('#')) continue;
-
-    let negated = false;
-    if (line.startsWith('!')) {
-      negated = true;
-      line = line.slice(1);
-    }
-
-    // Remove trailing spaces (unless escaped)
-    line = line.replace(/(?<!\\)\s+$/, '');
-    if (line === '') continue;
-
-    const directoryOnly = line.endsWith('/');
-    if (directoryOnly) {
-      line = line.slice(0, -1);
-    }
-
-    const regex = globToRegex(line);
-    rules.push({ pattern: line, negated, directoryOnly, regex });
-  }
-
-  return rules;
-}
-
-/** Convert a simple gitignore glob to a regex. */
-function globToRegex(pattern: string): RegExp {
-  let reg = '';
-  let i = 0;
-
-  // If pattern doesn't contain /, it matches the basename only
-  const matchBasename = !pattern.includes('/');
-
-  // Remove leading /
-  if (pattern.startsWith('/')) {
-    pattern = pattern.slice(1);
-  }
-
-  while (i < pattern.length) {
-    const c = pattern[i];
-    if (c === '*') {
-      if (pattern[i + 1] === '*') {
-        if (pattern[i + 2] === '/') {
-          reg += '(?:.*/)?';
-          i += 3;
-          continue;
-        }
-        reg += '.*';
-        i += 2;
-        continue;
-      }
-      reg += '[^/]*';
-      i++;
-    } else if (c === '?') {
-      reg += '[^/]';
-      i++;
-    } else if (c === '[') {
-      // Character class
-      const end = pattern.indexOf(']', i);
-      if (end === -1) {
-        reg += '\\[';
-        i++;
-      } else {
-        reg += pattern.slice(i, end + 1);
-        i = end + 1;
-      }
-    } else if (c === '\\') {
-      // Escape next char
-      if (i + 1 < pattern.length) {
-        reg += '\\' + pattern[i + 1];
-        i += 2;
-      } else {
-        reg += '\\\\';
-        i++;
-      }
-    } else if ('.+^${}()|'.includes(c)) {
-      reg += '\\' + c;
-      i++;
-    } else {
-      reg += c;
-      i++;
-    }
-  }
-
-  if (matchBasename) {
-    // Match against basename only
-    return new RegExp(`(?:^|/)${reg}$`);
-  }
-
-  return new RegExp(`^${reg}(?:$|/)`);
-}
-
-/** Test if a relative path matches the ignore rules. */
-function isIgnored(relPath: string, isDir: boolean, rules: IgnoreRule[]): boolean {
-  let ignored = false;
-  for (const rule of rules) {
-    if (rule.directoryOnly && !isDir) continue;
-
-    if (rule.regex.test(relPath)) {
-      ignored = !rule.negated;
-    }
-  }
-  return ignored;
-}
-
-// --------------------------------------------------------------------------
-// Simple pattern matching for ignore patterns
-// --------------------------------------------------------------------------
-
-/** Test if a path matches a simple ignore pattern. */
-function matchesSimplePattern(filePath: string, pattern: string): boolean {
-  // If pattern starts with dot, match any path component that starts with dot
-  if (pattern === '.*') {
-    const parts = filePath.split(path.sep);
-    return parts.some(p => p.startsWith('.') && p.length > 1);
-  }
-
-  // Exact path prefix match
-  if (filePath.startsWith(pattern)) return true;
-
-  // Basename match (e.g., "node_modules" matches anywhere)
-  const basename = path.basename(filePath);
-  if (basename === pattern) return true;
-
-  // Check path components
-  const parts = filePath.split(path.sep);
-  return parts.includes(pattern);
-}
-
-// --------------------------------------------------------------------------
-// File walker
+// File finder
 // --------------------------------------------------------------------------
 
 /**
- * Walk a directory tree, finding markdown files. Respects .gitignore files
- * found along the way, plus the global ignore patterns for the platform.
+ * Glob patterns of the files listed in the stash. Upstream: `markdownExtensions`
+ * in glow/ui/ui.go (note: these are patterns, unlike the extension list in
+ * utils.IsMarkdownFile, so files without an extension are not listed).
+ */
+export const markdownExtensions = ['*.md', '*.mdown', '*.mkdn', '*.mkd', '*.markdown'];
+
+/**
+ * Find the markdown files under rootDir, as glow v3.0.0's findLocalFiles does:
+ * with ShowAllFiles, every matching file (hidden files, node_modules and
+ * .gitignored paths included); otherwise skipping the platform ignore patterns
+ * (dotfiles and dot-directories, node_modules, $GOPATH, ~/Library on macOS)
+ * and whatever the enclosing git repository's .gitignore excludes.
  *
- * @param rootDir  The directory to walk
- * @param cfg      The Glow config (for ignore patterns, showAllFiles)
- * @returns        Array of Markdown entries found
+ * Throws if rootDir can't be resolved (upstream reports an errMsg).
  */
 export function findMarkdowns(rootDir: string, cfg: Config): Markdown[] {
-  const results: Markdown[] = [];
-  const globalIgnores = cfg.showAllFiles ? [] : ignorePatterns(cfg);
-
-  walkDir(rootDir, rootDir, [], globalIgnores, cfg.showAllFiles, results);
-  return results;
+  const results = cfg.showAllFiles
+    ? findAllFilesExcept(rootDir, markdownExtensions, null)
+    : findFilesExcept(rootDir, markdownExtensions, ignorePatterns(cfg));
+  return results.map((res) => localFileToMarkdown(rootDir, res));
 }
 
-function walkDir(
-  dir: string,
-  rootDir: string,
-  parentRules: IgnoreRule[],
-  globalIgnores: string[],
-  showAll: boolean,
-  results: Markdown[],
-): void {
-  // Load .gitignore in this directory
-  let rules = [...parentRules];
-  const gitignorePath = path.join(dir, '.gitignore');
-  try {
-    if (fs.existsSync(gitignorePath)) {
-      const content = fs.readFileSync(gitignorePath, 'utf-8');
-      rules = [...rules, ...parseGitignore(content)];
+/**
+ * Convert a file finder result to a Markdown document (upstream:
+ * localFileToMarkdown). Body is loaded lazily.
+ */
+export function localFileToMarkdown(cwd: string, res: SearchResult): Markdown {
+  const md = newMarkdown(res.path, stripAbsolutePath(res.path, cwd), '', res.info.mtime);
+  buildFilterValue(md);
+  return md;
+}
+
+/** Upstream stripAbsolutePath: resolve symlinks on both paths, drop the cwd prefix. */
+function stripAbsolutePath(fullPath: string, cwd: string): string {
+  const evalSymlinks = (p: string): string => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return '';
     }
-  } catch {
-    // Ignore read errors
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    const relPath = path.relative(rootDir, fullPath);
-
-    // Check global ignore patterns
-    if (!showAll) {
-      let globallyIgnored = false;
-      for (const pattern of globalIgnores) {
-        if (matchesSimplePattern(fullPath, pattern) || matchesSimplePattern(relPath, pattern)) {
-          globallyIgnored = true;
-          break;
-        }
-      }
-      if (globallyIgnored) continue;
-    }
-
-    const isDir = entry.isDirectory();
-
-    // Check .gitignore rules
-    if (!showAll && isIgnored(relPath, isDir, rules)) {
-      continue;
-    }
-
-    if (isDir) {
-      // Skip symlinks to directories to avoid loops
-      if (entry.isSymbolicLink()) continue;
-      walkDir(fullPath, rootDir, rules, globalIgnores, showAll, results);
-    } else {
-      // Check if it's a markdown file (or showAll with any file)
-      if (isMarkdownFile(entry.name)) {
-        try {
-          const stat = fs.statSync(fullPath);
-          const note = path.relative(rootDir, fullPath);
-          const body = ''; // Body is loaded lazily
-          results.push(newMarkdown(fullPath, note, body, stat.mtime));
-          buildFilterValue(results[results.length - 1]);
-        } catch {
-          // Skip files we can't stat
-        }
-      }
-    }
-  }
+  };
+  const fp = evalSymlinks(fullPath);
+  const cp = evalSymlinks(cwd);
+  return fp.split(cp + path.sep).join('');
 }
 
 // --------------------------------------------------------------------------

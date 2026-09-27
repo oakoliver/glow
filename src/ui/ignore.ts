@@ -17,10 +17,9 @@ export function ignorePatterns(cfg: Config): string[] {
     patterns.push(path.join(cfg.homeDir, 'Library'));
   }
 
-  // Common across all platforms
-  if (cfg.gopath) {
-    patterns.push(cfg.gopath);
-  }
+  // Common across all platforms. An empty GOPATH is harmless: gitcha joins
+  // separator-less patterns onto the walked directory, which never matches.
+  patterns.push(cfg.gopath);
   patterns.push('node_modules');
   patterns.push('.*'); // dotfiles / dotdirectories
 

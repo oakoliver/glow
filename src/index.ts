@@ -78,7 +78,7 @@ export {
 export { newStyles, type Styles, type RenderFunc } from './ui/styles.js';
 
 // ─── UI: File walking ────────────────────────────────────────────────────────
-export { findMarkdowns, FoundMarkdownsMsg } from './ui/filewalk.js';
+export { findMarkdowns, FoundMarkdownsMsg, markdownExtensions, localFileToMarkdown } from './ui/filewalk.js';
 
 // ─── UI: Editor ──────────────────────────────────────────────────────────────
 export { EditorFinishedMsg, openEditor } from './ui/editor.js';

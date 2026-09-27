@@ -1,6 +1,6 @@
 {
   "name": "@oakoliver/glow",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Terminal markdown reader — TypeScript port of Charmbracelet's Glow (v3.0.0 parity), built on the @oakoliver Charm ports",
   "type": "module",
   "main": "./dist/index.js",
