@@ -24,7 +24,12 @@ export {
   wrapCodeBlock,
   isMarkdownFile,
   glamourStyle,
+  hasDarkBackground,
+  parsePagerCommand,
 } from './utils.js';
+
+// ─── Shell field splitting ($PAGER) ─────────────────────────────────────────
+export { shellFields, type Getenv } from './shell.js';
 
 // ─── URL handling ────────────────────────────────────────────────────────────
 export { readmeURL, isURL } from './url.js';
@@ -50,13 +55,14 @@ export {
   stripAbsolutePath,
 } from './ui/ui.js';
 
-export type { CommonModel, StashModel as StashModelInterface, PagerModel as PagerModelInterface } from './ui/ui.js';
+export type { CommonModel } from './ui/ui.js';
+export { glowLogoView } from './ui/common.js';
 
 // ─── UI: Stash ───────────────────────────────────────────────────────────────
-export { StashModel } from './ui/stash.js';
+export { StashModel, newSections, plural } from './ui/stash.js';
 
 // ─── UI: Pager ───────────────────────────────────────────────────────────────
-export { PagerModel } from './ui/pager.js';
+export { PagerModel, glamourRender } from './ui/pager.js';
 
 // ─── UI: Markdown ────────────────────────────────────────────────────────────
 export {
@@ -69,27 +75,7 @@ export {
 } from './ui/markdown.js';
 
 // ─── UI: Styles ──────────────────────────────────────────────────────────────
-export {
-  adaptiveColor,
-  cream,
-  yellowGreen,
-  green,
-  fuchsia,
-  dimFuchsia,
-  red,
-  darkGray,
-  greenFg,
-  fuchsiaFg,
-  dimFuchsiaFg,
-  grayFg,
-  midGrayFg,
-  brightGrayFg,
-  dimBrightGrayFg,
-  redFg,
-  semiDimGreenFg,
-  subtleStyle,
-  errorTitleStyle,
-} from './ui/styles.js';
+export { newStyles, type Styles, type RenderFunc } from './ui/styles.js';
 
 // ─── UI: File walking ────────────────────────────────────────────────────────
 export { findMarkdowns, FoundMarkdownsMsg } from './ui/filewalk.js';

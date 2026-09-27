@@ -7,28 +7,31 @@ import { spawnSync } from 'node:child_process';
 import { type Config, defaultConfig, loadConfigFile, getConfigFilePath, ensureConfigFile } from './config.js';
 import { readmeURL, isURL } from './url.js';
 import type { Source } from './source.js';
-import { removeFrontmatter, isMarkdownFile, wrapCodeBlock, glamourStyle, expandPath as utilExpandPath } from './utils.js';
+import {
+  removeFrontmatter,
+  isMarkdownFile,
+  wrapCodeBlock,
+  glamourStyle,
+  expandPath as utilExpandPath,
+  parsePagerCommand,
+} from './utils.js';
 import { keyword, paragraph } from './style.js';
 import {
   TermRenderer,
   withWordWrap,
   withBaseURL,
   withPreservedNewLines,
-  withAutoStyle,
-  withStylePath,
   AutoStyleName,
   NoTTYStyleName,
   defaultStyles,
 } from '@oakoliver/glamour';
 import { NewProgram } from './ui/ui.js';
-import { StashModel } from './ui/stash.js';
-import { PagerModel } from './ui/pager.js';
 
 // --------------------------------------------------------------------------
 // Version
 // --------------------------------------------------------------------------
 
-const VERSION = '1.0.0';
+const VERSION = '2.0.0';
 
 // --------------------------------------------------------------------------
 // README detection names
@@ -313,8 +316,11 @@ function validateStyle(style: string): string | null {
 // --------------------------------------------------------------------------
 
 function stdinIsPipe(): boolean {
+  // Like upstream: stdin is a pipe when it isn't a character device (e.g.
+  // a terminal or /dev/null), or when it has buffered content.
   try {
-    return !process.stdin.isTTY;
+    const st = fs.fstatSync(0);
+    return !st.isCharacterDevice() || st.size > 0;
   } catch {
     return false;
   }
@@ -355,12 +361,13 @@ async function executeCLI(
   const styleName = String(viperCfg.style || 'auto');
   const wordWrapWidth = Number(viperCfg.width) || 80;
 
-  // Create glamour renderer
+  // Create glamour renderer (like upstream, the CLI always preserves
+  // newlines; glow v3 no longer forces a lipgloss color profile here)
   const renderer = new TermRenderer(
     glamourStyle(styleName, isCode),
     withWordWrap(wordWrapWidth),
     ...(baseURL ? [withBaseURL(baseURL)] : []),
-    ...(viperCfg.preserveNewLines ? [withPreservedNewLines()] : []),
+    withPreservedNewLines(),
   );
 
   const out = renderer.render(content);
@@ -370,14 +377,14 @@ async function executeCLI(
   const useTUI = viperCfg.tui || flags.changed.has('tui');
 
   if (usePager) {
-    let pagerCmd = process.env.PAGER || 'less -r';
-    const parts = pagerCmd.split(' ');
-    const result = spawnSync(parts[0], parts.slice(1), {
+    // glow v2.1.2+: parse $PAGER with shell syntax (quotes, escapes, $VARs)
+    const fields = parsePagerCommand(process.env.PAGER);
+    const result = spawnSync(fields[0], fields.slice(1), {
       input: out,
       stdio: ['pipe', 'inherit', 'inherit'],
     });
     if (result.error) {
-      throw new Error(`unable to run pager: ${result.error.message}`);
+      throw new Error(`unable to run command: ${result.error.message}`);
     }
     return;
   }
@@ -401,15 +408,12 @@ async function runTUI(
   filePath: string,
   content?: string,
 ): Promise<void> {
+  // Read environment to get debugging stuff (GLAMOUR_STYLE, GLOW_ENABLE_GLAMOUR)
   const cfg: Config = defaultConfig();
 
-  // Apply viper config values
-  const glamourStyle = String(viperCfg.style || 'auto');
-  const styleErr = validateStyle(glamourStyle);
-  if (styleErr) {
-    cfg.glamourStyle = flags.style;
-  } else {
-    cfg.glamourStyle = glamourStyle;
+  // use style set in env, or the resolved style if unset/invalid
+  if (validateStyle(process.env.GLAMOUR_STYLE ?? '')) {
+    cfg.glamourStyle = String(viperCfg.style || 'auto');
   }
 
   cfg.path = filePath;
@@ -419,12 +423,7 @@ async function runTUI(
   cfg.enableMouse = Boolean(viperCfg.mouse);
   cfg.preserveNewLines = Boolean(viperCfg.preserveNewLines);
 
-  const program = NewProgram(
-    cfg,
-    (_common) => new StashModel(cfg),
-    (_common) => new PagerModel(cfg),
-    content,
-  );
+  const program = NewProgram(cfg, undefined, undefined, content);
 
   await program.run();
 }
@@ -433,8 +432,8 @@ async function runTUI(
 // Config subcommand
 // --------------------------------------------------------------------------
 
-function executeConfig(): void {
-  const configPath = getConfigFilePath();
+function executeConfig(configFile: string): void {
+  const configPath = configFile || getConfigFilePath();
   ensureConfigFile(configPath);
 
   const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
@@ -480,7 +479,7 @@ async function main(): Promise<void> {
 
   // config subcommand
   if (flags.configCmd) {
-    executeConfig();
+    executeConfig(flags.configPath);
     return;
   }
 

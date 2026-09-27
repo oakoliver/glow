@@ -4,11 +4,10 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
 import {
-  TermRenderer,
-  withAutoStyle,
+  withStandardStyle,
   withStylePath,
   withStyles,
-  withStylesFromJSON,
+  withStylesFromJSONFile,
   DarkStyle,
   LightStyle,
   PinkStyle,
@@ -24,6 +23,7 @@ import {
   TokyoNightStyleName,
 } from '@oakoliver/glamour';
 import type { TermRendererOption, StyleConfig } from '@oakoliver/glamour';
+import { shellFields, type Getenv } from './shell.js';
 
 // --------------------------------------------------------------------------
 // RemoveFrontmatter
@@ -121,11 +121,14 @@ export function isMarkdownFile(filename: string): boolean {
 /**
  * Returns a glamour TermRendererOption based on the given style.
  * When rendering a pure code block, modifies the style to remove indentation.
+ *
+ * glow v3 (Glamour v2): the "auto" style no longer sniffs the terminal for
+ * markdown documents; it always resolves to the standard "dark" style.
  */
 export function glamourStyle(style: string, isCode: boolean): TermRendererOption {
   if (!isCode) {
     if (style === AutoStyleName) {
-      return withAutoStyle();
+      return withStandardStyle(DarkStyleName);
     }
     return withStylePath(style);
   }
@@ -136,11 +139,9 @@ export function glamourStyle(style: string, isCode: boolean): TermRendererOption
 
   switch (style) {
     case AutoStyleName: {
-      // Detect dark/light — default to dark
-      const isDark = process.env.COLORFGBG
-        ? !process.env.COLORFGBG.endsWith(';0')
-        : true;
-      styleConfig = structuredClone(isDark ? DarkStyle : LightStyle);
+      // lipgloss.HasDarkBackground(os.Stdin, os.Stdout) — we can't query the
+      // terminal synchronously here, so detect via COLORFGBG (default dark).
+      styleConfig = structuredClone(hasDarkBackground() ? DarkStyle : LightStyle);
       break;
     }
     case DarkStyleName:
@@ -162,7 +163,7 @@ export function glamourStyle(style: string, isCode: boolean): TermRendererOption
       styleConfig = structuredClone(TokyoNightStyle);
       break;
     default:
-      return withStylesFromJSON(style);
+      return withStylesFromJSONFile(style);
   }
 
   // Remove code block margin for code file rendering
@@ -171,4 +172,46 @@ export function glamourStyle(style: string, isCode: boolean): TermRendererOption
   }
 
   return withStyles(styleConfig);
+}
+
+// --------------------------------------------------------------------------
+// hasDarkBackground
+// --------------------------------------------------------------------------
+
+/**
+ * Best-effort synchronous terminal background detection via $COLORFGBG
+ * ("fg;bg", where a bg of 0-6 or 8 is dark). Defaults to dark.
+ */
+export function hasDarkBackground(env: string | undefined = process.env.COLORFGBG): boolean {
+  if (!env) return true;
+  const parts = env.split(';');
+  const bg = parseInt(parts[parts.length - 1], 10);
+  if (Number.isNaN(bg)) return true;
+  return bg < 7 || bg === 8;
+}
+
+// --------------------------------------------------------------------------
+// parsePagerCommand
+// --------------------------------------------------------------------------
+
+/**
+ * Resolve the $PAGER command into program + args. Defaults to `less -r`.
+ * glow v2.1.2+: parsed with shell syntax (quotes, escapes, $VARs) instead
+ * of splitting on spaces.
+ */
+export function parsePagerCommand(
+  pagerCmd: string | undefined,
+  env: Getenv = (k) => process.env[k] ?? '',
+): string[] {
+  const cmd = pagerCmd || 'less -r';
+  let fields: string[];
+  try {
+    fields = shellFields(cmd, env);
+  } catch {
+    throw new Error(`unable to parse PAGER command: ${cmd}`);
+  }
+  if (fields.length === 0) {
+    throw new Error(`unable to parse PAGER command: ${cmd}`);
+  }
+  return fields;
 }

@@ -23,9 +23,7 @@ export interface Config {
   /** Working directory or file path. */
   path: string;
 
-  /** High-performance pager rendering. */
-  highPerformancePager: boolean;
-  /** Whether glamour rendering is enabled. */
+  /** Whether glamour rendering is enabled (GLOW_ENABLE_GLAMOUR, for debugging). */
   glamourEnabled: boolean;
 }
 
@@ -41,7 +39,6 @@ export function defaultConfig(): Config {
     enableMouse: false,
     preserveNewLines: false,
     path: '',
-    highPerformancePager: process.env.GLOW_HIGH_PERFORMANCE_PAGER !== 'false',
     glamourEnabled: process.env.GLOW_ENABLE_GLAMOUR !== 'false',
   };
 }
@@ -162,8 +159,9 @@ export function parseSimpleYaml(content: string): Record<string, string | number
  * Load config from the default config file, merging with defaults.
  * Returns an object with all recognized glow config keys.
  */
-export function loadConfigFile(): Record<string, string | number | boolean> {
-  const configFile = getConfigFilePath();
+export function loadConfigFile(
+  configFile: string = getConfigFilePath(),
+): Record<string, string | number | boolean> {
   const defaults: Record<string, string | number | boolean> = {
     style: 'auto',
     width: 0,

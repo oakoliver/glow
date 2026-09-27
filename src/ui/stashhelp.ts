@@ -2,13 +2,7 @@
 // Port of charmbracelet/glow/ui/stashhelp.go
 
 import { stringWidth } from '@oakoliver/lipgloss';
-import {
-  greenFg,
-  semiDimGreenFg,
-  grayFg,
-  midGrayFg,
-  subtleStyle,
-} from './styles.js';
+import { newStyles, type Styles } from './styles.js';
 
 // --------------------------------------------------------------------------
 // Types
@@ -47,7 +41,7 @@ export function newHelpColumn(pairs: string[]): HelpColumn {
 // --------------------------------------------------------------------------
 
 /** Render a help column into rows, padded to the given height. */
-function renderColumn(col: HelpColumn, height: number): string[] {
+function renderColumn(styles: Styles, col: HelpColumn, height: number): string[] {
   const [keyWidth, valWidth] = maxWidths(col);
   const rows: string[] = [];
 
@@ -61,11 +55,11 @@ function renderColumn(col: HelpColumn, height: number): string[] {
       v = entry.val;
 
       if (k === 's') {
-        k = greenFg(k);
-        v = semiDimGreenFg(v);
+        k = styles.greenFg(k);
+        v = styles.semiDimGreenFg(v);
       } else {
-        k = grayFg(k);
-        v = midGrayFg(v);
+        k = styles.grayFg(k);
+        v = styles.midGrayFg(v);
       }
     }
 
@@ -133,6 +127,8 @@ export interface HelpViewContext {
   width: number;
   /** Horizontal padding. */
   horizontalPadding: number;
+  /** Current styles (defaults to dark-background styles). */
+  styles?: Styles;
 }
 
 // --------------------------------------------------------------------------
@@ -146,18 +142,19 @@ export interface HelpViewContext {
 export function miniHelpView(ctx: HelpViewContext, entries: string[]): string {
   if (entries.length === 0) return '';
 
-  const truncationChar = subtleStyle().render('\u2026');
+  const styles = ctx.styles ?? newStyles(true);
+  const truncationChar = styles.subtleStyle.render('\u2026');
   const truncationWidth = stringWidth(truncationChar);
 
   const leftGutter = '  ';
   const maxWidth = ctx.width - ctx.horizontalPadding - truncationWidth - stringWidth(leftGutter);
   let s = leftGutter;
 
-  const dividerDot = grayFg(' \u2022 ');
+  const dividerDot = styles.dividerDot.toString();
 
   for (let i = 0; i < entries.length; i += 2) {
-    const k = grayFg(entries[i]);
-    const v = midGrayFg(entries[i + 1]);
+    const k = styles.grayFg(entries[i]);
+    const v = styles.midGrayFg(entries[i + 1]);
 
     let next = `${k} ${v}`;
     if (i < entries.length - 2) {
@@ -180,7 +177,7 @@ export function miniHelpView(ctx: HelpViewContext, entries: string[]): string {
 // --------------------------------------------------------------------------
 
 /** Build a multi-line full help view from groups of key/val pairs. */
-export function fullHelpView(groups: string[][]): string {
+export function fullHelpView(groups: string[][], styles: Styles = newStyles(true)): string {
   const columns: HelpColumn[] = [];
   for (const g of groups) {
     if (g.length === 0) continue;
@@ -194,7 +191,7 @@ export function fullHelpView(groups: string[][]): string {
 
   const renderedCols: string[][] = [];
   for (const c of columns) {
-    renderedCols.push(renderColumn(c, tallestCol));
+    renderedCols.push(renderColumn(styles, c, tallestCol));
   }
 
   return mergeColumns(renderedCols);
@@ -215,7 +212,7 @@ export function renderHelp(
   groups: string[][],
 ): [string, number] {
   if (ctx.showFullHelp) {
-    const str = fullHelpView(groups);
+    const str = fullHelpView(groups, ctx.styles);
     const numLines = str.split('\n').length;
     return [str, Math.max(numLines, MIN_HELP_VIEW_HEIGHT)];
   }

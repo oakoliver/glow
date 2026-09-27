@@ -360,7 +360,8 @@ describe('defaultConfig', () => {
     expect(cfg.enableMouse).toBe(false);
     expect(cfg.preserveNewLines).toBe(false);
     expect(cfg.glamourEnabled).toBe(true);
-    expect(cfg.highPerformancePager).toBe(true);
+    // glow v3 removed GLOW_HIGH_PERFORMANCE_PAGER (Bubble Tea v2 dropped it)
+    expect('highPerformancePager' in cfg).toBe(false);
     expect(cfg.path).toBe('');
   });
 });

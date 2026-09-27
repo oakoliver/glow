@@ -1,5 +1,5 @@
 // ui.ts — Core TUI model for the Glow app
-// Port of charmbracelet/glow/ui/ui.go
+// Port of charmbracelet/glow/ui/ui.go (glow v3 / Bubble Tea v2)
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -8,29 +8,41 @@ import {
   type Msg,
   type Cmd,
   Program,
+  View,
+  NewView,
   KeyPressMsg,
-  KeyCode,
-  KeyMod,
   WindowSizeMsg,
+  BackgroundColorMsg,
+  RequestBackgroundColor,
+  MouseMode,
   Quit,
   Suspend,
   Batch,
-  WithAltScreen,
-  WithMouseMode,
-  MouseMode,
 } from '@oakoliver/bubbletea';
-import {
-  TermRenderer,
-  withWordWrap,
-  withAutoStyle,
-  withStylePath,
-} from '@oakoliver/glamour';
 
 import type { Config } from '../config.js';
 import { removeFrontmatter } from '../utils.js';
 import { type Markdown, newMarkdown, buildFilterValue } from './markdown.js';
-import { errorTitleStyle, subtleStyle } from './styles.js';
-import { findMarkdowns, FoundMarkdownsMsg } from './filewalk.js';
+import { newStyles } from './styles.js';
+import { type CommonModel, errorView } from './common.js';
+import { FoundMarkdownsMsg } from './filewalk.js';
+import {
+  StashModel,
+  StashViewState,
+  FilterState,
+  FetchedMarkdownMsg,
+  FilteredMarkdownMsg,
+  LocalFileSearchFinished,
+  ErrMsg,
+  filterMarkdowns,
+  findLocalFiles,
+} from './stash.js';
+import { PagerModel, ContentRenderedMsg, renderWithGlamour } from './pager.js';
+
+export type { CommonModel } from './common.js';
+export { errorView, indent } from './common.js';
+export { FetchedMarkdownMsg, FilteredMarkdownMsg } from './stash.js';
+export { ContentRenderedMsg } from './pager.js';
 
 // --------------------------------------------------------------------------
 // State enum
@@ -39,75 +51,6 @@ import { findMarkdowns, FoundMarkdownsMsg } from './filewalk.js';
 export const enum State {
   ShowStash = 0,
   ShowDocument = 1,
-}
-
-// --------------------------------------------------------------------------
-// Sibling model interfaces (forward declarations)
-// --------------------------------------------------------------------------
-
-/**
- * StashModel — the file list / stash view.
- * The actual implementation lives in ./stash.ts; we define the interface
- * here so ui.ts can compile independently.
- */
-export interface StashModel {
-  markdowns: Markdown[];
-  filteredMarkdowns: Markdown[];
-  isFiltering: boolean;
-  update(msg: Msg): [StashModel, Cmd];
-  view(): string;
-  addMarkdowns(mds: Markdown[]): void;
-  updateFilter(): void;
-  resize(width: number, height: number): void;
-}
-
-/**
- * PagerModel — the document rendering view.
- * The actual implementation lives in ./pager.ts.
- */
-export interface PagerModel {
-  currentDocument: Markdown | null;
-  update(msg: Msg): [PagerModel, Cmd];
-  view(): string;
-  setContent(rendered: string): void;
-  setSize(width: number, height: number): void;
-  unload(): void;
-}
-
-// --------------------------------------------------------------------------
-// Messages
-// --------------------------------------------------------------------------
-
-/** Sent when markdown content has been fetched (e.g. read from disk). */
-export class FetchedMarkdownMsg {
-  readonly _tag = 'FetchedMarkdownMsg';
-  constructor(
-    public readonly markdown: Markdown,
-    public readonly body: string,
-  ) {}
-}
-
-/** Sent when glamour has finished rendering markdown content. */
-export class ContentRenderedMsg {
-  readonly _tag = 'ContentRenderedMsg';
-  constructor(public readonly content: string) {}
-}
-
-/** Sent after filtering markdowns in the stash. */
-export class FilteredMarkdownMsg {
-  readonly _tag = 'FilteredMarkdownMsg';
-  constructor(public readonly markdowns: Markdown[]) {}
-}
-
-// --------------------------------------------------------------------------
-// CommonModel
-// --------------------------------------------------------------------------
-
-export interface CommonModel {
-  cfg: Config;
-  cwd: string;
-  width: number;
-  height: number;
 }
 
 // --------------------------------------------------------------------------
@@ -121,12 +64,7 @@ export class GlowModel implements Model {
   stash: StashModel;
   pager: PagerModel;
 
-  constructor(
-    common: CommonModel,
-    state: State,
-    stash: StashModel,
-    pager: PagerModel,
-  ) {
+  constructor(common: CommonModel, state: State, stash: StashModel, pager: PagerModel) {
     this.common = common;
     this.state = state;
     this.fatalErr = null;
@@ -135,147 +73,191 @@ export class GlowModel implements Model {
   }
 
   init(): Cmd {
-    if (this.state === State.ShowStash) {
-      return findLocalFiles(this.common);
+    const cmds: Cmd[] = [this.stash.spinnerTick(), RequestBackgroundColor];
+
+    switch (this.state) {
+      case State.ShowStash:
+        cmds.push(findLocalFiles(this.common));
+        break;
+      case State.ShowDocument: {
+        const md = this.pager.currentDocument;
+        if (!md) break;
+        if (md.localPath) {
+          let content: string;
+          try {
+            content = fs.readFileSync(md.localPath, 'utf-8');
+          } catch (err) {
+            const e = err instanceof Error ? err : new Error(String(err));
+            return () => new ErrMsg(e);
+          }
+          md.body = removeFrontmatter(content);
+        }
+        cmds.push(renderWithGlamour(this.pager, md));
+        break;
+      }
     }
 
-    if (this.state === State.ShowDocument && this.pager.currentDocument) {
-      const md = this.pager.currentDocument;
-      return fetchAndRenderMarkdown(md, this.common);
-    }
-
-    return null;
+    return Batch(...cmds);
   }
 
   update(msg: Msg): [Model, Cmd] {
-    const cmds: Cmd[] = [];
-
-    // If there's a fatal error, any key press quits
+    // If there's been an error, any key exits
     if (this.fatalErr !== null) {
       if (msg instanceof KeyPressMsg) {
         return [this, Quit];
       }
-      return [this, null];
     }
 
-    // Global key handling
-    if (msg instanceof KeyPressMsg) {
-      const isCtrl = (msg.mod & (4 as KeyMod)) !== 0; // KeyMod.Ctrl = 4
+    const cmds: Cmd[] = [];
 
-      // ctrl+c → quit
-      if (isCtrl && msg.text === 'c') {
-        return [this, Quit];
-      }
+    if (msg instanceof BackgroundColorMsg) {
+      this.common.styles = newStyles(msg.isDark());
+      this.stash.setStyles(this.common.styles);
+    } else if (msg instanceof KeyPressMsg) {
+      switch (msg.toString()) {
+        case 'esc':
+          if (
+            this.state === State.ShowDocument ||
+            this.stash.viewState === StashViewState.LoadingDocument
+          ) {
+            return [this, Batch(...this.unloadDocument())];
+          }
+          break;
 
-      // ctrl+z → suspend
-      if (isCtrl && msg.text === 'z') {
-        return [this, Suspend];
-      }
+        case 'r':
+          if (this.state === State.ShowStash) {
+            // pass through all keys if we're editing the filter
+            if (this.stash.filterState === FilterState.Filtering) {
+              const [stash, cmd] = this.stash.update(msg);
+              this.stash = stash;
+              return [this, cmd];
+            }
+            this.stash.markdowns = [];
+            return [this, this.init()];
+          }
+          break;
 
-      // escape — if showing document, go back to stash
-      if (msg.code === (27 as number) && this.state === State.ShowDocument) {
-        return unloadDocument(this);
-      }
-
-      // left / h / backspace — go back from document
-      if (this.state === State.ShowDocument) {
-        if (
-          msg.code === (259 as number) || // KeyCode.Left
-          msg.text === 'h' ||
-          msg.code === (127 as number) // KeyCode.Delete (backspace)
-        ) {
-          return unloadDocument(this);
-        }
-      }
-
-      // Stash-specific keys (only when not filtering)
-      if (this.state === State.ShowStash && !this.stash.isFiltering) {
-        // q → quit
-        if (msg.text === 'q') {
+        case 'q':
+          if (this.state === State.ShowStash) {
+            // pass through all keys if we're editing the filter
+            if (this.stash.filterState === FilterState.Filtering) {
+              const [stash, cmd] = this.stash.update(msg);
+              this.stash = stash;
+              return [this, cmd];
+            }
+          }
           return [this, Quit];
-        }
 
-        // r → refresh files
-        if (msg.text === 'r') {
-          cmds.push(findLocalFiles(this.common));
-        }
+        case 'left':
+        case 'h':
+        case 'delete':
+          if (this.state === State.ShowDocument) {
+            cmds.push(...this.unloadDocument());
+            return [this, Batch(...cmds)];
+          }
+          break;
+
+        case 'ctrl+z':
+          return [this, Suspend];
+
+        // Ctrl+C always quits no matter where in the application you are.
+        case 'ctrl+c':
+          return [this, Quit];
+
+        default:
+          break;
       }
-    }
-
-    // Window size
-    if (msg instanceof WindowSizeMsg) {
+    } else if (msg instanceof WindowSizeMsg) {
+      // Window size is received when starting up and on every resize
       this.common.width = msg.width;
       this.common.height = msg.height;
-      this.stash.resize(msg.width, msg.height);
+      this.stash.setSize(msg.width, msg.height);
       this.pager.setSize(msg.width, msg.height);
-      return [this, null];
-    }
-
-    // FetchedMarkdownMsg — set on pager and render
-    if (msg instanceof FetchedMarkdownMsg) {
+    } else if (msg instanceof FetchedMarkdownMsg) {
+      // We've loaded a markdown file's contents for rendering
       const md = msg.markdown;
-      md.body = msg.body;
+      md.body = removeFrontmatter(md.body);
       this.pager.currentDocument = md;
-      cmds.push(renderWithGlamour(md.body, this.common));
-      return [this, Batch(...cmds)];
-    }
-
-    // ContentRenderedMsg — switch to document view
-    if (msg instanceof ContentRenderedMsg) {
-      this.pager.setContent(msg.content);
+      cmds.push(renderWithGlamour(this.pager, md));
+    } else if (msg instanceof ContentRenderedMsg) {
       this.state = State.ShowDocument;
-      return [this, Batch(...cmds)];
-    }
-
-    // FoundMarkdownsMsg — add results to stash
-    if (msg instanceof FoundMarkdownsMsg) {
+    } else if (msg instanceof LocalFileSearchFinished) {
+      // Always pass these messages to the stash so we can keep it updated
+      // about activity, even if the user isn't currently viewing the stash.
+      const [stash, cmd] = this.stash.update(msg);
+      this.stash = stash;
+      return [this, cmd];
+    } else if (msg instanceof FoundMarkdownsMsg) {
       this.stash.addMarkdowns(msg.markdowns);
-      this.stash.updateFilter();
-      return [this, Batch(...cmds)];
+      if (this.stash.filterApplied()) {
+        for (const md of msg.markdowns) buildFilterValue(md);
+      }
+      if (this.stash.shouldUpdateFilter()) {
+        cmds.push(filterMarkdowns(this.stash));
+      }
+      // The file walk is synchronous, so the search is finished here.
+      cmds.push(() => new LocalFileSearchFinished());
+    } else if (msg instanceof FilteredMarkdownMsg) {
+      if (this.state === State.ShowDocument) {
+        const [stash, cmd] = this.stash.update(msg);
+        this.stash = stash;
+        cmds.push(cmd);
+      }
     }
 
-    // FilteredMarkdownMsg — pass to stash
-    if (msg instanceof FilteredMarkdownMsg) {
-      this.stash.filteredMarkdowns = msg.markdowns;
-      return [this, null];
-    }
-
-    // Delegate to active child model
-    if (this.state === State.ShowDocument) {
-      const [updatedPager, pagerCmd] = this.pager.update(msg);
-      this.pager = updatedPager;
-      cmds.push(pagerCmd);
-    } else {
-      const [updatedStash, stashCmd] = this.stash.update(msg);
-      this.stash = updatedStash;
-      cmds.push(stashCmd);
+    // Process children
+    switch (this.state) {
+      case State.ShowStash: {
+        const [stash, cmd] = this.stash.update(msg);
+        this.stash = stash;
+        cmds.push(cmd);
+        break;
+      }
+      case State.ShowDocument: {
+        const [pager, cmd] = this.pager.update(msg);
+        this.pager = pager;
+        cmds.push(cmd);
+        break;
+      }
     }
 
     return [this, Batch(...cmds)];
   }
 
-  view(): string {
+  view(): View {
+    let content: string;
     if (this.fatalErr !== null) {
-      return errorView(this.fatalErr, true);
+      content = errorView(this.common.styles, this.fatalErr, true);
+    } else if (this.state === State.ShowDocument) {
+      content = this.pager.view();
+    } else {
+      content = this.stash.view();
     }
 
-    if (this.state === State.ShowDocument) {
-      return this.pager.view();
+    const v = NewView(content);
+    v.altScreen = true;
+    if (this.common.cfg.enableMouse) {
+      v.mouseMode = MouseMode.CellMotion;
     }
-
-    return this.stash.view();
+    return v;
   }
-}
 
-// --------------------------------------------------------------------------
-// Helper: unload document and go back to stash
-// --------------------------------------------------------------------------
+  /**
+   * Unloads a document from the pager. Note that while this method alters
+   * the model we also need to send along any commands returned.
+   */
+  unloadDocument(): Cmd[] {
+    this.state = State.ShowStash;
+    this.stash.viewState = StashViewState.Ready;
+    this.pager.unload();
+    this.pager.showHelp = false;
 
-function unloadDocument(m: GlowModel): [GlowModel, Cmd] {
-  m.state = State.ShowStash;
-  m.pager.unload();
-  m.pager.currentDocument = null;
-  return [m, null];
+    const batch: Cmd[] = [];
+    if (!this.stash.shouldSpin()) {
+      batch.push(this.stash.spinnerTick());
+    }
+    return batch;
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -284,8 +266,8 @@ function unloadDocument(m: GlowModel): [GlowModel, Cmd] {
 
 export function newGlowModel(
   cfg: Config,
-  stashFactory: (common: CommonModel) => StashModel,
-  pagerFactory: (common: CommonModel) => PagerModel,
+  stashFactory: (common: CommonModel) => StashModel = (common) => new StashModel(cfg, common),
+  pagerFactory: (common: CommonModel) => PagerModel = (common) => new PagerModel(cfg, common),
   content?: string,
 ): GlowModel {
   const cwd = process.cwd();
@@ -293,142 +275,70 @@ export function newGlowModel(
   const common: CommonModel = {
     cfg,
     cwd,
-    width: 80,
-    height: 24,
+    width: 0,
+    height: 0,
+    styles: newStyles(true),
   };
-
-  // Auto-detect glamour style from COLORFGBG when set to "auto"
-  if (cfg.glamourStyle === 'auto') {
-    const env = process.env.COLORFGBG;
-    if (env && env.endsWith(';0')) {
-      cfg.glamourStyle = 'light';
-    } else {
-      cfg.glamourStyle = 'dark';
-    }
-  }
 
   const stash = stashFactory(common);
   const pager = pagerFactory(common);
+  const m = new GlowModel(common, State.ShowStash, stash, pager);
 
-  let state: State = State.ShowStash;
-
-  // If raw content is provided and no path, start in document view
-  if (content !== undefined && !cfg.path) {
-    state = State.ShowDocument;
-    const md = newMarkdown('', 'stdin', content, new Date());
+  let p = cfg.path;
+  if (!p && content !== undefined && content !== '') {
+    m.state = State.ShowDocument;
+    const md = newMarkdown('', '', content, new Date());
     buildFilterValue(md);
     pager.currentDocument = md;
-  } else if (cfg.path) {
-    try {
-      const stat = fs.statSync(cfg.path);
-
-      if (stat.isDirectory()) {
-        // Path is a directory — start in stash, searching that dir
-        state = State.ShowStash;
-        common.cwd = path.resolve(cfg.path);
-      } else if (stat.isFile()) {
-        // Path is a file — start in document view
-        state = State.ShowDocument;
-        const relNote = stripAbsolutePath(cfg.path, cwd);
-        const md = newMarkdown(
-          path.resolve(cfg.path),
-          relNote,
-          '', // body loaded lazily in init
-          stat.mtime,
-        );
-        buildFilterValue(md);
-        pager.currentDocument = md;
-      }
-    } catch {
-      // If stat fails, default to stash view
-      state = State.ShowStash;
-    }
+    return m;
   }
 
-  return new GlowModel(common, state, stash, pager);
+  if (!p) {
+    p = '.';
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(p);
+  } catch (err) {
+    m.fatalErr = err instanceof Error ? err : new Error(String(err));
+    return m;
+  }
+
+  if (stat.isDirectory()) {
+    m.state = State.ShowStash;
+    common.cwd = path.resolve(p);
+  } else {
+    m.state = State.ShowDocument;
+    const md: Markdown = newMarkdown(p, stripAbsolutePath(p, cwd), '', stat.mtime);
+    buildFilterValue(md);
+    pager.currentDocument = md;
+  }
+
+  return m;
 }
 
 // --------------------------------------------------------------------------
 // NewProgram
 // --------------------------------------------------------------------------
 
+/**
+ * Returns a new Tea program. Alt screen and mouse mode are declared by the
+ * model's View (Bubble Tea v2), not via program options.
+ */
 export function NewProgram(
   cfg: Config,
-  stashFactory: (common: CommonModel) => StashModel,
-  pagerFactory: (common: CommonModel) => PagerModel,
+  stashFactory?: (common: CommonModel) => StashModel,
+  pagerFactory?: (common: CommonModel) => PagerModel,
   content?: string,
 ): Program {
   const model = newGlowModel(cfg, stashFactory, pagerFactory, content);
-  const opts = [WithAltScreen()];
-
-  if (cfg.enableMouse) {
-    opts.push(WithMouseMode(MouseMode.CellMotion));
-  }
-
-  return new Program(model, ...opts);
-}
-
-// --------------------------------------------------------------------------
-// Commands
-// --------------------------------------------------------------------------
-
-/** Cmd that discovers local markdown files. */
-function findLocalFiles(common: CommonModel): Cmd {
-  return () => {
-    const mds = findMarkdowns(common.cwd, common.cfg);
-    return new FoundMarkdownsMsg(mds);
-  };
-}
-
-/** Cmd that reads a file from disk and returns FetchedMarkdownMsg. */
-function fetchAndRenderMarkdown(md: Markdown, common: CommonModel): Cmd {
-  return () => {
-    let body = md.body;
-    if (!body && md.localPath) {
-      body = fs.readFileSync(md.localPath, 'utf-8');
-    }
-    body = removeFrontmatter(body);
-    return new FetchedMarkdownMsg(md, body);
-  };
-}
-
-/** Cmd that renders markdown content with glamour and returns ContentRenderedMsg. */
-function renderWithGlamour(body: string, common: CommonModel): Cmd {
-  return () => {
-    const width = common.cfg.glamourMaxWidth > 0
-      ? Math.min(common.cfg.glamourMaxWidth, common.width)
-      : common.width;
-
-    const styleOpt = common.cfg.glamourStyle === 'auto'
-      ? withAutoStyle()
-      : withStylePath(common.cfg.glamourStyle);
-
-    const renderer = new TermRenderer(styleOpt, withWordWrap(width));
-    const rendered = renderer.render(body);
-    return new ContentRenderedMsg(rendered);
-  };
+  return new Program(model);
 }
 
 // --------------------------------------------------------------------------
 // View helpers
 // --------------------------------------------------------------------------
-
-/** Render an error view with a styled title and message. */
-export function errorView(err: Error, fatal: boolean): string {
-  const title = fatal ? 'Fatal Error' : 'Error';
-  const styledTitle = errorTitleStyle().render(` ${title} `);
-  const styledMsg = subtleStyle().render(err.message);
-  return `\n  ${styledTitle}\n\n` + indent(styledMsg, 2) + '\n\n';
-}
-
-/** Add `n` spaces of indentation to each line of `s`. */
-export function indent(s: string, n: number): string {
-  const prefix = ' '.repeat(n);
-  return s
-    .split('\n')
-    .map((line) => prefix + line)
-    .join('\n');
-}
 
 /** Remove the cwd prefix from an absolute path to produce a relative display path. */
 export function stripAbsolutePath(fullPath: string, cwd: string): string {

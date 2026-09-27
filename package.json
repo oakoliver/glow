@@ -1,7 +1,7 @@
 {
   "name": "@oakoliver/glow",
-  "version": "1.0.1",
-  "description": "Terminal markdown reader — zero-dependency TypeScript port of Charmbracelet's Glow",
+  "version": "2.0.0",
+  "description": "Terminal markdown reader — zero-dependency TypeScript port of Charmbracelet's Glow (v3.0.0 parity)",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -19,7 +19,8 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build:esm": "esbuild src/cli.ts --bundle --format=esm --platform=node --outfile=dist/cli.js --target=esnext --banner:js='#!/usr/bin/env node' --external:@oakoliver/lipgloss --external:@oakoliver/glamour --external:@oakoliver/bubbletea --external:@oakoliver/bubbles",
@@ -54,10 +55,10 @@
     "url": "https://github.com/oakoliver/glow/issues"
   },
   "dependencies": {
-    "@oakoliver/lipgloss": "^1.0.0",
-    "@oakoliver/glamour": "^1.0.0",
-    "@oakoliver/bubbletea": "^1.0.0",
-    "@oakoliver/bubbles": "^1.0.0"
+    "@oakoliver/lipgloss": "^1.1.1",
+    "@oakoliver/glamour": "^1.1.0",
+    "@oakoliver/bubbletea": "^1.2.0",
+    "@oakoliver/bubbles": "^1.2.0"
   },
   "devDependencies": {
     "@types/node": "^20",

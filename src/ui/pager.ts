@@ -1,17 +1,20 @@
 // pager.ts — Document pager for the Glow TUI
-// Port of charmbracelet/glow/ui/pager.go
+// Port of charmbracelet/glow/ui/pager.go (glow v3)
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
-import { newStyle, stringWidth, Right } from '@oakoliver/lipgloss';
-import { TermRenderer, withWordWrap, withPreservedNewLines, withOptions } from '@oakoliver/glamour';
+import { newStyle, stringWidth } from '@oakoliver/lipgloss';
+import { TermRenderer, withWordWrap, withPreservedNewLines } from '@oakoliver/glamour';
+import type { TermRendererOption } from '@oakoliver/glamour';
 import type { Msg, Cmd } from '@oakoliver/bubbletea';
-import { KeyPressMsg, KeyCode, KeyMod, WindowSizeMsg, Batch } from '@oakoliver/bubbletea';
-import { ViewportModel, newViewport, withViewportWidth, withViewportHeight } from '@oakoliver/bubbles';
+import { KeyPressMsg, KeyCode, WindowSizeMsg, Batch } from '@oakoliver/bubbletea';
+import { ViewportModel, newViewport } from '@oakoliver/bubbles';
 import type { Markdown } from './markdown.js';
-import { adaptiveColor } from './styles.js';
-import { EditorFinishedMsg } from './editor.js';
+import { newStyles } from './styles.js';
+import { type CommonModel, glowLogoView } from './common.js';
+import { EditorFinishedMsg, openEditor } from './editor.js';
+import { truncateWithTail } from './stashitem.js';
 import type { Config } from '../config.js';
 import { glamourStyle, isMarkdownFile, wrapCodeBlock, removeFrontmatter } from '../utils.js';
 
@@ -21,85 +24,8 @@ import { glamourStyle, isMarkdownFile, wrapCodeBlock, removeFrontmatter } from '
 
 const statusBarHeight = 1;
 const lineNumberWidth = 4;
-
-// --------------------------------------------------------------------------
-// Pager-specific colors
-// --------------------------------------------------------------------------
-
-const mintGreen = () => adaptiveColor('#89F0CB', '#89F0CB');
-const darkGreen = () => adaptiveColor('#1C8760', '#1C8760');
-const lineNumberFg = () => adaptiveColor('#4A4A4A', '#4A4A4A');
-const statusBarNoteFg = () => adaptiveColor('#7B7B7B', '#656565');
-const statusBarBg = () => adaptiveColor('#E6E6E6', '#242424');
-
-// --------------------------------------------------------------------------
-// Pager-specific styles
-// --------------------------------------------------------------------------
-
-function statusBarScrollPosStyle() {
-  return newStyle()
-    .foreground(mintGreen())
-    .background(darkGreen())
-    .padding(0, 1);
-}
-
-function statusBarNoteStyle() {
-  return newStyle()
-    .foreground(statusBarNoteFg())
-    .background(statusBarBg())
-    .padding(0, 1);
-}
-
-function statusBarHelpStyle() {
-  return newStyle()
-    .foreground(statusBarNoteFg())
-    .background(statusBarBg())
-    .padding(0, 1);
-}
-
-function statusBarMessageStyle() {
-  return newStyle()
-    .foreground(mintGreen())
-    .background(darkGreen());
-}
-
-function statusBarMessageScrollPosStyle() {
-  return newStyle()
-    .foreground(mintGreen())
-    .background(darkGreen())
-    .padding(0, 1);
-}
-
-function statusBarMessageHelpStyle() {
-  return newStyle()
-    .foreground(darkGreen())
-    .background(mintGreen())
-    .padding(0, 1);
-}
-
-function helpViewStyle() {
-  return newStyle().padding(1, 2);
-}
-
-function lineNumberStyle() {
-  return newStyle()
-    .foreground(lineNumberFg())
-    .width(lineNumberWidth)
-    .align(Right)
-    .padding(0, 1, 0, 0);
-}
-
-// --------------------------------------------------------------------------
-// Glow logo (inline — avoids circular dependency with stash)
-// --------------------------------------------------------------------------
-
-function glowLogoView() {
-  return newStyle()
-    .foreground(mintGreen())
-    .background(darkGreen())
-    .padding(0, 1)
-    .render(' Glow ');
-}
+const statusMessageTimeout = 3000;
+const ellipsis = '…';
 
 // --------------------------------------------------------------------------
 // Messages
@@ -118,7 +44,7 @@ export class ReloadMsg {
 
 /** Internal: status message display timer expired. */
 class StatusMessageTimeoutMsg {
-  readonly _tag = 'StatusMessageTimeoutMsg';
+  readonly _tag = 'PagerStatusMessageTimeoutMsg';
 }
 
 // --------------------------------------------------------------------------
@@ -135,35 +61,45 @@ export enum PagerState {
 // --------------------------------------------------------------------------
 
 export class PagerModel {
-  width = 0;
-  height = 0;
+  common: CommonModel;
   viewport: ViewportModel;
   state: PagerState = PagerState.Browse;
   showHelp = false;
   statusMessage = '';
   statusMessageTimer: ReturnType<typeof setTimeout> | null = null;
   currentDocument: Markdown | null = null;
-  cfg: Config;
   watcher: fs.FSWatcher | null = null;
 
-  constructor(cfg: Config) {
-    this.cfg = cfg;
+  constructor(cfg: Config, common?: CommonModel) {
+    this.common = common ?? { cfg, cwd: process.cwd(), width: 0, height: 0, styles: newStyles(true) };
     this.viewport = newViewport();
+  }
+
+  get cfg(): Config {
+    return this.common.cfg;
+  }
+
+  get width(): number {
+    return this.common.width;
+  }
+
+  get height(): number {
+    return this.common.height;
   }
 
   // -- Sizing ---------------------------------------------------------------
 
   setSize(w: number, h: number): void {
-    this.width = w;
-    this.height = h;
-
-    let viewportHeight = h - statusBarHeight;
-    if (this.showHelp) {
-      viewportHeight -= helpHeight();
-    }
+    this.common.width = w;
+    this.common.height = h;
 
     this.viewport.setWidth(w);
-    this.viewport.setHeight(Math.max(0, viewportHeight));
+    this.viewport.setHeight(h - statusBarHeight);
+
+    if (this.showHelp) {
+      const pagerHelpHeight = (this.helpView().match(/\n/g) ?? []).length;
+      this.viewport.setHeight(this.viewport.height() - (statusBarHeight + pagerHelpHeight));
+    }
   }
 
   // -- Content --------------------------------------------------------------
@@ -176,7 +112,10 @@ export class PagerModel {
 
   toggleHelp(): void {
     this.showHelp = !this.showHelp;
-    this.setSize(this.width, this.height);
+    this.setSize(this.common.width, this.common.height);
+    if (this.viewport.pastBottom()) {
+      this.viewport.gotoBottom();
+    }
   }
 
   // -- Status message -------------------------------------------------------
@@ -193,14 +132,23 @@ export class PagerModel {
       new Promise<Msg>((resolve) => {
         this.statusMessageTimer = setTimeout(() => {
           resolve(new StatusMessageTimeoutMsg());
-        }, 2000);
+        }, statusMessageTimeout);
       });
   }
 
   // -- Unload ---------------------------------------------------------------
 
   unload(): void {
+    if (this.showHelp) {
+      this.toggleHelp();
+    }
+    if (this.statusMessageTimer !== null) {
+      clearTimeout(this.statusMessageTimer);
+      this.statusMessageTimer = null;
+    }
+    this.state = PagerState.Browse;
     this.viewport.setContent('');
+    this.viewport.setYOffset(0);
     if (this.watcher !== null) {
       this.watcher.close();
       this.watcher = null;
@@ -213,126 +161,99 @@ export class PagerModel {
     const cmds: Cmd[] = [];
 
     if (msg instanceof KeyPressMsg) {
-      // q / esc — quit pager
-      if (msg.text === 'q' || msg.code === KeyCode.Escape) {
-        if (this.showHelp) {
-          this.toggleHelp();
+      const key = msg.toString();
+
+      switch (key) {
+        case 'q':
+        case 'esc':
+          if (this.state !== PagerState.Browse) {
+            this.state = PagerState.Browse;
+            return [this, null];
+          }
+          break;
+
+        case 'home':
+        case 'g':
+          this.viewport.gotoTop();
+          break;
+
+        case 'end':
+        case 'G':
+          this.viewport.gotoBottom();
+          break;
+
+        case 'd':
+          this.viewport.halfPageDown();
+          break;
+
+        case 'u':
+          this.viewport.halfPageUp();
+          break;
+
+        case 'e': {
+          if (!this.currentDocument?.localPath) break;
+          let lineno = roundToEven(this.viewport.totalLineCount() * this.viewport.scrollPercent());
+          if (this.viewport.atTop()) {
+            lineno = 0;
+          }
+          return [this, openEditor(this.currentDocument.localPath, lineno)];
+        }
+
+        case 'c':
+          if (this.currentDocument) {
+            copyToClipboard(this.currentDocument.body);
+            cmds.push(this.showStatusMsg('Copied contents'));
+          }
+          break;
+
+        case 'r':
+          if (this.currentDocument?.localPath) {
+            return [this, reloadDocument(this.currentDocument.localPath)];
+          }
           return [this, null];
-        }
-        return [this, null]; // parent handles navigation
+
+        case '?':
+          this.toggleHelp();
+          break;
+
+        default:
+          break;
       }
-
-      // home / g — go to top
-      if (msg.code === KeyCode.Home || (msg.text === 'g' && !msg.mod)) {
-        this.viewport.gotoTop();
-        return [this, null];
-      }
-
-      // end / G — go to bottom
-      if (msg.code === KeyCode.End || (msg.text === 'G' && !msg.mod)) {
-        this.viewport.gotoBottom();
-        return [this, null];
-      }
-
-      // d — half page down
-      if (msg.text === 'd' && !msg.mod) {
-        this.viewport.halfPageDown();
-        return [this, null];
-      }
-
-      // u — half page up
-      if (msg.text === 'u' && !msg.mod) {
-        this.viewport.halfPageUp();
-        return [this, null];
-      }
-
-      // e — open in editor
-      if (msg.text === 'e' && !msg.mod) {
-        if (this.currentDocument?.localPath) {
-          const { openEditor } = require('./editor.js') as typeof import('./editor.js');
-          const cmd = openEditor(this.currentDocument.localPath);
-          return [this, cmd];
-        }
-        return [this, null];
-      }
-
-      // c — copy to clipboard
-      if (msg.text === 'c' && !msg.mod) {
-        if (this.currentDocument?.body) {
-          copyToClipboard(this.currentDocument.body);
-          const cmd = this.showStatusMsg('Copied to clipboard');
-          return [this, cmd];
-        }
-        return [this, null];
-      }
-
-      // r — reload
-      if (msg.text === 'r' && !msg.mod) {
-        if (this.currentDocument?.localPath) {
-          const cmd = reloadDocument(this.currentDocument.localPath);
-          return [this, cmd];
-        }
-        return [this, null];
-      }
-
-      // ? — toggle help
-      if (msg.text === '?') {
-        this.toggleHelp();
-        return [this, null];
-      }
-
-      // Pass remaining keys to viewport
-      const [vp, vpCmd] = this.viewport.update(msg);
-      this.viewport = vp;
-      if (vpCmd) cmds.push(vpCmd);
-      return [this, cmds.length > 0 ? Batch(...cmds) : null];
-    }
-
-    if (msg instanceof ContentRenderedMsg) {
+    } else if (msg instanceof ContentRenderedMsg) {
       this.setContent(msg.content);
-      return [this, null];
-    }
-
-    if (msg instanceof ReloadMsg) {
+      const watch = watchFileCmd(this);
+      if (watch) cmds.push(watch);
+    } else if (msg instanceof ReloadMsg) {
       if (this.currentDocument?.localPath) {
         try {
           const body = fs.readFileSync(this.currentDocument.localPath, 'utf-8');
           this.currentDocument.body = body;
-          const cmd = renderWithGlamour(this, this.currentDocument);
-          return [this, cmd];
+          return [this, renderWithGlamour(this, this.currentDocument)];
         } catch {
-          const cmd = this.showStatusMsg('Could not reload file');
-          return [this, cmd];
+          return [this, this.showStatusMsg('Could not reload file')];
         }
       }
       return [this, null];
-    }
-
-    if (msg instanceof EditorFinishedMsg) {
+    } else if (msg instanceof EditorFinishedMsg) {
       if (msg.err) {
-        const cmd = this.showStatusMsg(`Editor error: ${msg.err.message}`);
-        return [this, cmd];
+        return [this, this.showStatusMsg(`Editor error: ${msg.err.message}`)];
       }
       // Reload after editing
       if (this.currentDocument?.localPath) {
-        const cmd = reloadDocument(this.currentDocument.localPath);
-        return [this, cmd];
+        return [this, reloadDocument(this.currentDocument.localPath)];
       }
       return [this, null];
-    }
-
-    if (msg instanceof WindowSizeMsg) {
-      this.setSize(msg.width, msg.height);
+    } else if (msg instanceof WindowSizeMsg) {
+      // We've received terminal dimensions, either for the first time or
+      // after a resize: re-render for the new width.
+      if (this.currentDocument) {
+        return [this, renderWithGlamour(this, this.currentDocument)];
+      }
       return [this, null];
-    }
-
-    if (msg instanceof StatusMessageTimeoutMsg) {
+    } else if (msg instanceof StatusMessageTimeoutMsg) {
       this.state = PagerState.Browse;
-      this.statusMessage = '';
-      return [this, null];
     }
 
-    // Pass unhandled messages to viewport
     const [vp, vpCmd] = this.viewport.update(msg);
     this.viewport = vp;
     if (vpCmd) cmds.push(vpCmd);
@@ -353,89 +274,99 @@ export class PagerModel {
   // -- Status bar -----------------------------------------------------------
 
   statusBarView(): string {
-    const isStatusMessage = this.state === PagerState.StatusMessage;
-
-    // Scroll percentage
-    const percent = `${Math.round(this.viewport.scrollPercent() * 100)}%`;
+    const showStatusMessage = this.state === PagerState.StatusMessage;
+    const styles = this.common.styles;
+    const width = this.common.width;
 
     // Logo
-    const logo = glowLogoView();
+    const logo = glowLogoView(styles);
+
+    // Scroll percent
+    const percent = Math.max(0, Math.min(1, this.viewport.scrollPercent()));
+    let scrollPercent = ` ${String(Math.round(percent * 100)).padStart(3, ' ')}% `;
+    scrollPercent = showStatusMessage
+      ? styles.statusBarMessageScrollPosStyle(scrollPercent)
+      : styles.statusBarScrollPosStyle(scrollPercent);
+
+    // "Help" note
+    const helpNote = showStatusMessage
+      ? styles.statusBarMessageHelpStyle(' ? Help ')
+      : styles.statusBarHelpStyle(' ? Help ');
 
     // Note
-    const note = this.currentDocument?.note ?? '';
+    let note = showStatusMessage ? this.statusMessage : (this.currentDocument?.note ?? '');
+    note = truncateWithTail(
+      ' ' + note + ' ',
+      Math.max(0, width - stringWidth(logo) - stringWidth(scrollPercent) - stringWidth(helpNote)),
+      ellipsis,
+    );
+    note = showStatusMessage ? styles.statusBarMessageStyle(note) : styles.statusBarNoteStyle(note);
 
-    let bar: string;
+    // Empty space
+    const padding = Math.max(
+      0,
+      width - stringWidth(logo) - stringWidth(note) - stringWidth(scrollPercent) - stringWidth(helpNote),
+    );
+    let emptySpace = ' '.repeat(padding);
+    emptySpace = showStatusMessage
+      ? styles.statusBarMessageStyle(emptySpace)
+      : styles.statusBarNoteStyle(emptySpace);
 
-    if (isStatusMessage) {
-      const scrollPos = statusBarMessageScrollPosStyle().render(percent);
-      const helpNote = statusBarMessageHelpStyle().render(' ? ');
-      const msgText = statusBarMessageStyle().render(' ' + this.statusMessage + ' ');
-      const usedWidth =
-        stringWidth(logo) + stringWidth(scrollPos) + stringWidth(helpNote) + stringWidth(msgText);
-      const gap = Math.max(0, this.width - usedWidth);
-      const filler = statusBarMessageStyle().render(' '.repeat(gap));
-      bar = logo + msgText + filler + scrollPos + helpNote;
-    } else {
-      const scrollPos = statusBarScrollPosStyle().render(percent);
-      const helpNote = statusBarHelpStyle().render(' ? ');
-      const noteText = statusBarNoteStyle().render(truncate(note, this.width / 2));
-      const usedWidth =
-        stringWidth(logo) + stringWidth(scrollPos) + stringWidth(helpNote) + stringWidth(noteText);
-      const gap = Math.max(0, this.width - usedWidth);
-      const filler = statusBarNoteStyle().render(' '.repeat(gap));
-      bar = logo + noteText + filler + scrollPos + helpNote;
-    }
-
-    return bar;
+    return logo + note + emptySpace + scrollPercent + helpNote;
   }
 
   // -- Help view ------------------------------------------------------------
 
   helpView(): string {
     const col1 = [
-      ['g/home', 'go to top'],
-      ['G/end', 'go to bottom'],
-      ['d', 'half page down'],
-      ['u', 'half page up'],
-    ];
-    const col2 = [
-      ['e', 'open in editor'],
-      ['c', 'copy to clipboard'],
-      ['r', 'reload'],
-      ['esc', 'back'],
+      'g/home  go to top',
+      'G/end   go to bottom',
+      'c       copy contents',
+      'e       edit this document',
+      'r       reload this document',
+      'esc     back to files',
+      'q       quit',
     ];
 
-    const maxKeyW1 = Math.max(...col1.map(([k]) => stringWidth(k)));
-    const maxKeyW2 = Math.max(...col2.map(([k]) => stringWidth(k)));
+    let s = '\n';
+    s += 'k/↑      up                  ' + col1[0] + '\n';
+    s += 'j/↓      down                ' + col1[1] + '\n';
+    s += 'b/pgup   page up             ' + col1[2] + '\n';
+    s += 'f/pgdn   page down           ' + col1[3] + '\n';
+    s += 'u        ½ page up           ' + col1[4] + '\n';
+    s += 'd        ½ page down         ';
 
-    const renderCol = (col: string[][], maxKeyW: number): string[] =>
-      col.map(([k, v]) => {
-        const keyPad = ' '.repeat(Math.max(0, maxKeyW - stringWidth(k)));
-        return `  ${newStyle().foreground(mintGreen()).render(k)}${keyPad}  ${newStyle().foreground(statusBarNoteFg()).render(v)}`;
-      });
-
-    const left = renderCol(col1, maxKeyW1);
-    const right = renderCol(col2, maxKeyW2);
-
-    const lines: string[] = [];
-    const rows = Math.max(left.length, right.length);
-    for (let i = 0; i < rows; i++) {
-      const l = i < left.length ? left[i] : '';
-      const r = i < right.length ? right[i] : '';
-      lines.push(l + '    ' + r);
+    if (col1.length > 5) {
+      s += col1[5];
     }
 
-    return helpViewStyle().render(lines.join('\n'));
+    s = s
+      .split('\n')
+      .map((l) => '  ' + l)
+      .join('\n');
+
+    // Fill up empty cells with spaces for background coloring
+    const width = this.common.width;
+    if (width > 0) {
+      s = s
+        .split('\n')
+        .map((line) => line + ' '.repeat(Math.max(width - stringWidth(line), 0)))
+        .join('\n');
+    }
+
+    return this.common.styles.helpViewStyle(s);
   }
 }
 
 // --------------------------------------------------------------------------
-// Help height helper
+// Helpers
 // --------------------------------------------------------------------------
 
-function helpHeight(): number {
-  // 4 entries + 2 padding lines
-  return 6;
+/** Go's math.RoundToEven. */
+function roundToEven(x: number): number {
+  const r = Math.round(x);
+  if (Math.abs(x % 1) === 0.5 && r % 2 !== 0) return r - 1;
+  return r;
 }
 
 // --------------------------------------------------------------------------
@@ -443,6 +374,16 @@ function helpHeight(): number {
 // --------------------------------------------------------------------------
 
 function copyToClipboard(text: string): void {
+  // Copy using OSC 52
+  try {
+    if (process.stdout.isTTY) {
+      process.stdout.write(`\x1b]52;c;${Buffer.from(text).toString('base64')}\x07`);
+    }
+  } catch {
+    // ignore
+  }
+
+  // Copy using native system clipboard
   try {
     const platform = process.platform;
     if (platform === 'darwin') {
@@ -465,12 +406,11 @@ function copyToClipboard(text: string): void {
 // File watching (fsnotify replacement)
 // --------------------------------------------------------------------------
 
+/** Start watching the current document's directory (no message delivery). */
 export function watchFile(model: PagerModel): void {
   if (!model.currentDocument?.localPath) return;
 
-  const filePath = model.currentDocument.localPath;
-  const dir = path.dirname(filePath);
-  const basename = path.basename(filePath);
+  const dir = path.dirname(model.currentDocument.localPath);
 
   if (model.watcher !== null) {
     model.watcher.close();
@@ -478,11 +418,7 @@ export function watchFile(model: PagerModel): void {
   }
 
   try {
-    model.watcher = fs.watch(dir, (_eventType, filename) => {
-      if (filename === basename) {
-        // The parent update loop should handle ReloadMsg
-      }
-    });
+    model.watcher = fs.watch(dir, () => {});
   } catch {
     // Could not watch directory
   }
@@ -500,13 +436,18 @@ export function watchFileCmd(model: PagerModel): Cmd | null {
     new Promise<Msg>((resolve) => {
       if (model.watcher !== null) {
         model.watcher.close();
+        model.watcher = null;
       }
       try {
-        model.watcher = fs.watch(dir, (_eventType, filename) => {
+        const watcher = fs.watch(dir, (_eventType, filename) => {
           if (filename === basename) {
+            watcher.close();
+            if (model.watcher === watcher) model.watcher = null;
             resolve(new ReloadMsg());
           }
         });
+        watcher.unref?.();
+        model.watcher = watcher;
       } catch {
         // Silently fail if watch is not possible
       }
@@ -538,84 +479,65 @@ export function renderWithGlamour(m: PagerModel, md: Markdown): Cmd {
   return () =>
     new Promise<Msg>((resolve) => {
       try {
-        const result = glamourRender(m, md.body);
-        resolve(new ContentRenderedMsg(result));
+        resolve(new ContentRenderedMsg(glamourRender(m, md.body)));
       } catch {
         resolve(new ContentRenderedMsg(md.body));
       }
     });
 }
 
-/** Render markdown content through glamour with line numbers and truncation. */
-function glamourRender(m: PagerModel, markdown: string): string {
-  // Determine available width
-  let contentWidth = m.width;
-  if (m.cfg.glamourMaxWidth > 0 && m.cfg.glamourMaxWidth < contentWidth) {
-    contentWidth = m.cfg.glamourMaxWidth;
+/** This is where the magic happens. */
+export function glamourRender(m: PagerModel, markdown: string): string {
+  const cfg = m.common.cfg;
+  const vpWidth = m.viewport.width();
+  const trunc = newStyle().maxWidth(vpWidth - lineNumberWidth);
+
+  if (!cfg.glamourEnabled) {
+    return markdown;
   }
 
-  const isCode = m.currentDocument
-    ? !isMarkdownFile(m.currentDocument.localPath)
-    : false;
-
-  // If it is not a markdown file, wrap in a code block
-  let body = removeFrontmatter(markdown);
-  if (isCode && m.currentDocument) {
-    const ext = path.extname(m.currentDocument.localPath);
-    body = wrapCodeBlock(body, ext);
+  const note = m.currentDocument?.note ?? '';
+  const isCode = !isMarkdownFile(note);
+  let width = Math.max(0, Math.min(cfg.glamourMaxWidth, vpWidth));
+  if (isCode) {
+    width = 0;
   }
 
-  // Render with glamour
-  const styleOpt = glamourStyle(m.cfg.glamourStyle, isCode);
-  const options = [styleOpt, withWordWrap(contentWidth)];
-  if (m.cfg.preserveNewLines) {
+  const options: TermRendererOption[] = [glamourStyle(cfg.glamourStyle, isCode), withWordWrap(width)];
+  if (cfg.preserveNewLines) {
     options.push(withPreservedNewLines());
   }
+  const r = new TermRenderer(...options);
 
-  const renderer = new TermRenderer(...options);
-  let rendered = renderer.render(body);
-
-  // Add line numbers if configured
-  if (m.cfg.showLineNumbers) {
-    rendered = addLineNumbers(rendered);
+  let body = removeFrontmatter(markdown);
+  if (isCode) {
+    body = wrapCodeBlock(body, path.extname(note));
   }
 
-  // Truncate lines to width
-  if (contentWidth > 0) {
-    const truncStyle = newStyle().maxWidth(contentWidth);
-    const lines = rendered.split('\n');
-    rendered = lines.map((line) => truncStyle.render(line)).join('\n');
+  let out = r.render(body);
+
+  if (isCode) {
+    out = out.trim();
   }
 
-  return rendered;
-}
+  // trim lines
+  const lines = out.split('\n');
 
-/** Prepend line numbers to each line of rendered content. */
-function addLineNumbers(content: string): string {
-  const lines = content.split('\n');
-  const style = lineNumberStyle();
-  return lines
-    .map((line, i) => style.render(String(i + 1)) + line)
-    .join('\n');
-}
-
-// --------------------------------------------------------------------------
-// Truncate helper
-// --------------------------------------------------------------------------
-
-function truncate(s: string, maxWidth: number): string {
-  if (stringWidth(s) <= maxWidth) return s;
-  const chars = [...s];
-  let w = 0;
-  let result = '';
-  for (const ch of chars) {
-    const cw = stringWidth(ch);
-    if (w + cw > maxWidth - 1) {
-      result += '\u2026';
-      break;
+  let content = '';
+  for (let i = 0; i < lines.length; i++) {
+    const s = lines[i];
+    if (isCode || cfg.showLineNumbers) {
+      content += m.common.styles.lineNumberStyle(String(i + 1).padStart(lineNumberWidth, ' '));
+      content += trunc.render(s);
+    } else {
+      content += s;
     }
-    result += ch;
-    w += cw;
+
+    // don't add an artificial newline after the last split
+    if (i + 1 < lines.length) {
+      content += '\n';
+    }
   }
-  return result;
+
+  return content;
 }

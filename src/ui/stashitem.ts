@@ -3,22 +3,7 @@
 
 import { newStyle } from '@oakoliver/lipgloss';
 import { stringWidth } from '@oakoliver/lipgloss';
-import {
-  greenFg,
-  dimGreenFg,
-  semiDimGreenFg,
-  dullFuchsiaFg,
-  fuchsiaFg,
-  dimFuchsiaFg,
-  dimDullFuchsiaFg,
-  dimNormalFg,
-  dimBrightGrayFg,
-  grayFg,
-  midGrayFg,
-  brightGrayFg,
-  fuchsia,
-  adaptiveColor,
-} from './styles.js';
+import { newStyles, type Styles } from './styles.js';
 import { normalize, type Markdown } from './markdown.js';
 
 // --------------------------------------------------------------------------
@@ -132,6 +117,8 @@ export interface StashItemContext {
   statusMessage: string;
   /** The stashing status message string to compare against. */
   stashingStatusMessage: string;
+  /** Current styles (defaults to dark-background styles). */
+  styles?: Styles;
 }
 
 // --------------------------------------------------------------------------
@@ -149,11 +136,16 @@ export function stashItemView(
   isSelected: boolean,
   relTime: string,
 ): string {
+  const styles = ctx.styles ?? newStyles(true);
+  const {
+    greenFg, dimGreenFg, semiDimGreenFg, dullFuchsiaFg, fuchsiaFg, dimFuchsiaFg,
+    dimNormalFg, dimBrightGrayFg, grayFg, brightGrayFg,
+  } = styles;
   const truncateTo = Math.max(0, ctx.width - ctx.horizontalPadding * 2);
   let gutter: string;
   let title = truncateWithTail(md.note, truncateTo);
   let date = relTime;
-  const icon = '';
+  let icon = '';
   let separator = '';
 
   const singleFiltered = ctx.singleFilteredItem;
@@ -163,6 +155,7 @@ export function stashItemView(
     // Selected item
     if (isStashing) {
       gutter = greenFg(verticalLine);
+      icon = dimGreenFg(icon);
       title = greenFg(title);
       date = semiDimGreenFg(date);
       separator = semiDimGreenFg(separator);
@@ -173,11 +166,12 @@ export function stashItemView(
         (ctx.sectionKey === ctx.filterSectionKey && ctx.isFilterApplied) ||
         singleFiltered
       ) {
-        const defaultFn = (s: string) => newStyle().foreground(fuchsia()).render(s);
-        const matchFn = (s: string) => newStyle().foreground(fuchsia()).underline(true).render(s);
-        title = styleFilteredText(title, ctx.filterValue, defaultFn, matchFn);
+        const st = newStyle().foreground(styles.fuchsia);
+        const matched = st.underline(true);
+        title = styleFilteredText(title, ctx.filterValue, (s) => st.render(s), (s) => matched.render(s));
       } else {
         title = fuchsiaFg(title);
+        icon = fuchsiaFg(icon);
       }
       date = dimFuchsiaFg(date);
       separator = dullFuchsiaFg(separator);
@@ -185,19 +179,21 @@ export function stashItemView(
   } else {
     gutter = ' ';
     if (isStashing) {
+      icon = dimGreenFg(icon);
       title = greenFg(title);
       date = semiDimGreenFg(date);
       separator = semiDimGreenFg(separator);
     } else if (ctx.isFiltering && ctx.filterValue === '') {
+      icon = dimGreenFg(icon);
       title = dimNormalFg(title);
       date = dimBrightGrayFg(date);
       separator = dimBrightGrayFg(separator);
     } else {
-      const defaultFn = (s: string) =>
-        newStyle().foreground(adaptiveColor('#1a1a1a', '#dddddd')).render(s);
-      const matchFn = (s: string) =>
-        newStyle().foreground(adaptiveColor('#1a1a1a', '#dddddd')).underline(true).render(s);
-      title = styleFilteredText(title, ctx.filterValue, defaultFn, matchFn);
+      icon = greenFg(icon);
+
+      const st = newStyle().foreground(styles.adaptive('#1a1a1a', '#dddddd'));
+      const matched = st.underline(true);
+      title = styleFilteredText(title, ctx.filterValue, (s) => st.render(s), (s) => matched.render(s));
       date = grayFg(date);
       separator = brightGrayFg(separator);
     }
