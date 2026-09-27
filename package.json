@@ -55,10 +55,10 @@
     "url": "https://github.com/oakoliver/glow/issues"
   },
   "dependencies": {
-    "@oakoliver/lipgloss": "^1.1.1",
-    "@oakoliver/glamour": "^1.1.0",
+    "@oakoliver/lipgloss": "^1.1.2",
+    "@oakoliver/glamour": "^2.0.0",
     "@oakoliver/bubbletea": "^1.2.0",
-    "@oakoliver/bubbles": "^1.2.0"
+    "@oakoliver/bubbles": "^1.2.2"
   },
   "devDependencies": {
     "@types/node": "^20",

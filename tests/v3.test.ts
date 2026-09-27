@@ -487,9 +487,12 @@ describe('CLI (glow v3)', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('# Heading');
     expect(r.stdout).not.toContain('title: t');
-    // Like upstream, the CLI always preserves newlines
-    expect(r.stdout).toContain('first line\n');
-    expect(r.stdout).toMatch(/\n\s*second line/);
+    // Like upstream, the CLI always preserves newlines. Expected bytes are
+    // upstream glow v3.0.0's output for the same file (`glow -w 40 cli.md`).
+    const pad = (s: string) => s.padEnd(38, ' ');
+    expect(r.stdout).toBe(
+      `\n${pad('  # Heading')}\n${pad('')}\n${pad('  first line')}\n${pad('  second line')}\n\n`,
+    );
   });
 
   test('reads markdown from a stdin pipe', () => {
