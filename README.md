@@ -1,6 +1,6 @@
 # @oakoliver/glow
 
-Terminal markdown reader — zero-dependency TypeScript port of [Charmbracelet's Glow](https://github.com/charmbracelet/glow).
+Terminal markdown reader — TypeScript port of [Charmbracelet's Glow](https://github.com/charmbracelet/glow), built on our `@oakoliver` ports of Lip Gloss, Glamour, Bubble Tea and Bubbles. Its only third-party dependencies come through Glamour (`highlight.js`, `node-emoji`).
 
 Render markdown files beautifully in the terminal, with a full interactive TUI for browsing and filtering markdown files in a directory.
 
