@@ -8,6 +8,7 @@ import {
   expandPath,
   wrapCodeBlock,
   isMarkdownFile,
+  hasDarkBackground,
 } from '../src/utils.js';
 import {
   parseSimpleYaml,
@@ -478,5 +479,21 @@ describe('CLI styles', () => {
   test('paragraph returns a styled string', () => {
     const result = paragraph('hello world');
     expect(result).toContain('hello');
+  });
+});
+
+describe('hasDarkBackground', () => {
+  test('reads the background from COLORFGBG like termenv', () => {
+    expect(hasDarkBackground('15;0')).toBe(true); // white on black (iTerm dark)
+    expect(hasDarkBackground('0;15')).toBe(false); // black on white
+    expect(hasDarkBackground('7;default;0')).toBe(true); // rxvt three-field form
+    expect(hasDarkBackground('0;7')).toBe(false);
+    expect(hasDarkBackground('15;6')).toBe(true);
+  });
+
+  test('assumes dark without a usable value', () => {
+    expect(hasDarkBackground(undefined)).toBe(true);
+    expect(hasDarkBackground('')).toBe(true);
+    expect(hasDarkBackground('15;default')).toBe(true);
   });
 });
