@@ -517,8 +517,9 @@ describe('CLI (glow v3)', () => {
     expect(r.stderr).toContain('unable to parse PAGER command: "less -r');
   });
 
-  test('--version reports 2.0.0', () => {
+  test('--version reports the package version', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dir, '..', 'package.json'), 'utf-8'));
     const r = run(['--version']);
-    expect(r.stdout.trim()).toBe('glow version 2.0.0');
+    expect(r.stdout.trim()).toBe(`glow version ${pkg.version}`);
   });
 });
