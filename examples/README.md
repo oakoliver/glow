@@ -50,6 +50,13 @@ glow -s dracula -w 100 - < examples/handbook/caching-api-responses-at-the-edge.m
 Renders straight to stdout in the Dracula style; `-` reads the document from
 stdin. Try `-s tokyo-night`, `-s pink`, `-s light` or `-s notty` too.
 
+## README pictures
+
+The README's pictures are recorded from these documents with the tapes in
+`assets/tapes/` (`hero`, `pager`, `stdin`, `styles`). Render one with
+[@oakoliver/vhs](https://github.com/oakoliver/vhs) from the repository root,
+after installing the sibling versions below.
+
 ## Requirements
 
 These commands need the sibling versions this glow requires:

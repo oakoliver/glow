@@ -4,6 +4,8 @@ Terminal markdown reader — TypeScript port of [Charmbracelet's Glow](https://g
 
 Render markdown files beautifully in the terminal, with a full interactive TUI for browsing and filtering markdown files in a directory.
 
+![glow examples/handbook: the file list, filtered by typing /cach with the matched characters underlined, then the caching guide opened in the pager and scrolled to its tables](https://raw.githubusercontent.com/oakoliver/glow/main/assets/hero.gif)
+
 **Parity:** Glow **v3.0.0** (built on the Bubble Tea v2 / Bubbles v2 / Lip Gloss v2 / Glamour v2 ports). See [CHANGELOG.md](./CHANGELOG.md) for what changed from 1.x.
 
 ## Install
@@ -19,6 +21,8 @@ npm install @oakoliver/glow
 ```
 
 ## CLI Usage
+
+![A section of a markdown file piped into glow -: a heading, two tables with column dividers, and a paragraph](https://raw.githubusercontent.com/oakoliver/glow/main/assets/stdin.png)
 
 ```bash
 # Render a markdown file
@@ -83,7 +87,11 @@ glow config
 
 You can also pass a path to a custom JSON style file.
 
+![The same section, with a TypeScript code block, rendered by glow -s dracula and then glow -s tokyo-night](https://raw.githubusercontent.com/oakoliver/glow/main/assets/styles.gif)
+
 ## TUI Keybindings
+
+![glow -t -l -w 100 on the caching guide: the pager with line numbers, paging down through the code block and both tables, then the ? help](https://raw.githubusercontent.com/oakoliver/glow/main/assets/pager.gif)
 
 | Key | Action |
 |-----|--------|
@@ -150,6 +158,14 @@ location), `GLAMOUR_STYLE` (TUI style override), `GLOW_ENABLE_GLAMOUR=false`
 `GLOW_HIGH_PERFORMANCE_PAGER` was removed in 2.0.0, as in Glow v3.
 
 Run `glow config` to open the config file in your editor.
+
+## Recording the pictures
+
+The pictures in this README are real output of this package, recorded with
+[@oakoliver/vhs](https://github.com/oakoliver/vhs) from the tapes in
+[`assets/tapes`](assets/tapes) against the sample documents in
+[`examples/handbook`](examples/handbook). Each tape runs glow with a fresh
+`HOME`, so a local `glow.yml` doesn't change the output.
 
 ## Part of the Charm Ecosystem Port
 
