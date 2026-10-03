@@ -133,7 +133,7 @@ parsePagerCommand('"/opt/my pager/less" -R'); // ['/opt/my pager/less', '-R']
 
 ## Configuration
 
-Glow reads its configuration from `~/.config/glow/glow.yml` (or `$XDG_CONFIG_HOME/glow/glow.yml`).
+Glow reads its configuration from `glow.yml` in `$GLOW_CONFIG_HOME`, else `$XDG_CONFIG_HOME/glow`, else the platform default: `~/Library/Preferences/glow` on macOS and `~/.config/glow` elsewhere (as upstream). `glow config` creates the file if it's missing and opens it.
 
 ```yaml
 # style name or JSON path (default "auto")
