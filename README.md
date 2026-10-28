@@ -8,6 +8,8 @@ Render markdown files beautifully in the terminal, with a full interactive TUI f
 
 **Parity:** Glow **v3.0.0** (built on the Bubble Tea v2 / Bubbles v2 / Lip Gloss v2 / Glamour v2 ports). See [CHANGELOG.md](./CHANGELOG.md) for what changed from 1.x.
 
+**Read the article:** [Getting Started with Glow](https://engineering.oakoliver.com/articles/getting-started-glow-markdown-terminal-reader) · [Porting Glow from Go to TypeScript](https://engineering.oakoliver.com/articles/porting-go-glow-to-typescript-terminal-markdown-reader-zero-dependencies)
+
 ## Install
 
 ```bash
